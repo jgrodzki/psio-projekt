@@ -2,7 +2,6 @@ import cv2 as cv
 import numpy as np
 import skimage as ski
 
-# Capture and print every contour evaluation (for tuning purposes only)
 DEBUG = False
 # Excpected number of slots on a conveyor
 SLOT_COUNT = 4
@@ -38,13 +37,12 @@ SLOT_COLOR_THRESHOLD = 40
 SLOT_OPENING_SIZE = 5
 # Size of closing operation performed on a binary slot image
 SLOT_CLOSING_SIZE = 10
-# List of objects expected to be detected including their names, thresholds values used for contour matching and highlight colors
 OBJECTS = [
-    ("bolt", 0.2, (0, 0, 255)),
-    ("long_bolt", 3.0, (0, 255, 0)),
-    ("short_bolt", 2.0, (255, 0, 0)),
-    ("nut", 0.1, (0, 255, 255)),
-    ("dowel", 0.1, (255, 0, 255)),
+    ("bolt", 0.2, 5700.0, (0, 0, 255)),
+    ("long_bolt", 3.0, 8500.0, (0, 255, 0)),
+    ("short_bolt", 2.0, 1700.0, (255, 0, 0)),
+    ("nut", 0.1, 7500.0, (0, 255, 255)),
+    ("dowel", 0.1, 7000.0, (255, 0, 255)),
 ]
 
 
@@ -58,12 +56,13 @@ def distance(a, b):
 
 def build_contour_base(objects):
     contour_base = {}
-    for name, detection_threshold, highlight_color in objects:
+    for name, contour_threshold, size_threshold, highlight_color in objects:
         img = cv.imread("zdj_do_progowania/" + name + "_mask.png", cv.IMREAD_GRAYSCALE)
         contours, _ = cv.findContours(img, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_NONE)
         contour_base[name] = {
             "contour": contours[0],
-            "detection_threshold": detection_threshold,
+            "contour_threshold": contour_threshold,
+            "size_threshold": size_threshold,
             "highlight_color": highlight_color,
         }
     return contour_base
@@ -93,6 +92,10 @@ while True:
     frame_scaled = ski.transform.rescale(
         frame, 1.0 / IMAGE_DIVISION_FACTOR, order=0, channel_axis=2, preserve_range=True
     )
+    slot = frame[
+        SCANNER_HEAD_POS + TAPE_WIDTH : SCANNER_TAIL_POS,
+        CONVEYOR_LEFT_BOUND:CONVEYOR_RIGHT_BOUND,
+    ]
     tape_mask = (
         (distance(tape_color, frame_scaled) < TAPE_COLOR_THRESHOLD) * 255
     ).astype(np.uint8)
@@ -126,10 +129,6 @@ while True:
         if scanner_head_detection:
             remaining_deadzone = SCANNER_DEADZONE
             slots_detected += 1
-            slot = frame[
-                SCANNER_HEAD_POS + TAPE_WIDTH : SCANNER_TAIL_POS,
-                CONVEYOR_LEFT_BOUND:CONVEYOR_RIGHT_BOUND,
-            ]
             slot_mask = (
                 (distance(background_color, slot) > SLOT_COLOR_THRESHOLD) * 255
             ).astype(np.uint8)
@@ -147,16 +146,20 @@ while True:
             detected_contours, _ = cv.findContours(
                 slot_mask, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_NONE
             )
-            slot_mask = cv.cvtColor(slot_mask, cv.COLOR_GRAY2BGR)
-            matches = np.zeros((len(contour_base)))
+            if DEBUG:
+                slot_mask = cv.cvtColor(slot_mask, cv.COLOR_GRAY2BGR)
+            else:
+                matches = np.zeros((len(contour_base)))
             for detected_contour in detected_contours:
                 for i, (name, object) in enumerate(contour_base.items()):
                     c = cv.matchShapes(
                         object["contour"], detected_contour, cv.CONTOURS_MATCH_I1, 0
                     )
-                    if DEBUG:
-                        print("Check for " + name + ":", c)
-                    if c < object["detection_threshold"]:
+                    s = cv.contourArea(detected_contour)
+                    if (
+                        c < object["contour_threshold"]
+                        and s > object["size_threshold"] - 500.0
+                    ) and s < object["size_threshold"] + 500.0:
                         if DEBUG:
                             cv.drawContours(
                                 slot_mask,
@@ -165,16 +168,29 @@ while True:
                                 (0, 255, 0),
                                 3,
                             )
+                            print("\033[32m", end="")
                         else:
                             matches[i] += 1
                             cv.drawContours(
-                                slot_mask,
+                                slot,
                                 detected_contour,
                                 -1,
                                 object["highlight_color"],
                                 3,
                             )
                             break
+                    if DEBUG:
+                        print(
+                            "Check for " + name + "\tcontour:",
+                            c,
+                            "\tcontour_threshold:",
+                            object["contour_threshold"],
+                            "\tsize:",
+                            s,
+                            "\tsize_threshold:",
+                            object["size_threshold"],
+                            "\033[0m",
+                        )
                 if DEBUG:
                     print()
             if not DEBUG:
@@ -184,93 +200,101 @@ while True:
                     "no matches:", (len(detected_contours) - matches.sum()).astype(int)
                 )
                 print()
-            cv.imshow("slot", slot_mask)
+            if DEBUG:
+                cv.imshow("slot", slot_mask)
+            else:
+                cv.imshow("frame", slot)
             # stop to display the results
             while True:
                 if cv.waitKey(-1) == ord("q"):
                     break
-        tape_mask = cv.cvtColor(tape_mask, cv.COLOR_GRAY2BGR)
-        if scanner_head_detection:
-            tape_mask[
-                SCANNER_HEAD_POS
-                // IMAGE_DIVISION_FACTOR : (SCANNER_HEAD_POS + SCANNER_WIDTH)
-                // IMAGE_DIVISION_FACTOR,
-                CONVEYOR_LEFT_BOUND
-                // IMAGE_DIVISION_FACTOR : CONVEYOR_RIGHT_BOUND
-                // IMAGE_DIVISION_FACTOR,
-            ] = [
-                0,
-                255,
-                0,
-            ]
-        else:
-            tape_mask[
-                SCANNER_HEAD_POS
-                // IMAGE_DIVISION_FACTOR : (SCANNER_HEAD_POS + SCANNER_WIDTH)
-                // IMAGE_DIVISION_FACTOR,
-                CONVEYOR_LEFT_BOUND
-                // IMAGE_DIVISION_FACTOR : CONVEYOR_RIGHT_BOUND
-                // IMAGE_DIVISION_FACTOR,
-            ] = [
-                0,
-                0,
-                255,
-            ]
-        # if scanner_tail_detection:
-        #     tape_mask[
-        #         SCANNER_TAIL_POS
-        #         // IMAGE_DIVISION_FACTOR : (SCANNER_TAIL_POS + SCANNER_WIDTH)
-        #         // IMAGE_DIVISION_FACTOR,
-        #         CONVEYOR_LEFT_BOUND
-        #         // IMAGE_DIVISION_FACTOR : CONVEYOR_RIGHT_BOUND
-        #         // IMAGE_DIVISION_FACTOR,
-        #     ] = [
-        #         0,
-        #         255,
-        #         0,
-        #     ]
-        # else:
-        #     tape_mask[
-        #         SCANNER_TAIL_POS
-        #         // IMAGE_DIVISION_FACTOR : (SCANNER_TAIL_POS + SCANNER_WIDTH)
-        #         // IMAGE_DIVISION_FACTOR,
-        #         CONVEYOR_LEFT_BOUND
-        #         // IMAGE_DIVISION_FACTOR : CONVEYOR_RIGHT_BOUND
-        #         // IMAGE_DIVISION_FACTOR,
-        #     ] = [
-        #         0,
-        #         0,
-        #         255,
-        #     ]
+        if DEBUG:
+            tape_mask = cv.cvtColor(tape_mask, cv.COLOR_GRAY2BGR)
+            if scanner_head_detection:
+                tape_mask[
+                    SCANNER_HEAD_POS
+                    // IMAGE_DIVISION_FACTOR : (SCANNER_HEAD_POS + SCANNER_WIDTH)
+                    // IMAGE_DIVISION_FACTOR,
+                    CONVEYOR_LEFT_BOUND
+                    // IMAGE_DIVISION_FACTOR : CONVEYOR_RIGHT_BOUND
+                    // IMAGE_DIVISION_FACTOR,
+                ] = [
+                    0,
+                    255,
+                    0,
+                ]
+            else:
+                tape_mask[
+                    SCANNER_HEAD_POS
+                    // IMAGE_DIVISION_FACTOR : (SCANNER_HEAD_POS + SCANNER_WIDTH)
+                    // IMAGE_DIVISION_FACTOR,
+                    CONVEYOR_LEFT_BOUND
+                    // IMAGE_DIVISION_FACTOR : CONVEYOR_RIGHT_BOUND
+                    // IMAGE_DIVISION_FACTOR,
+                ] = [
+                    0,
+                    0,
+                    255,
+                ]
+            # if scanner_tail_detection:
+            #     tape_mask[
+            #         SCANNER_TAIL_POS
+            #         // IMAGE_DIVISION_FACTOR : (SCANNER_TAIL_POS + SCANNER_WIDTH)
+            #         // IMAGE_DIVISION_FACTOR,
+            #         CONVEYOR_LEFT_BOUND
+            #         // IMAGE_DIVISION_FACTOR : CONVEYOR_RIGHT_BOUND
+            #         // IMAGE_DIVISION_FACTOR,
+            #     ] = [
+            #         0,
+            #         255,
+            #         0,
+            #     ]
+            # else:
+            #     tape_mask[
+            #         SCANNER_TAIL_POS
+            #         // IMAGE_DIVISION_FACTOR : (SCANNER_TAIL_POS + SCANNER_WIDTH)
+            #         // IMAGE_DIVISION_FACTOR,
+            #         CONVEYOR_LEFT_BOUND
+            #         // IMAGE_DIVISION_FACTOR : CONVEYOR_RIGHT_BOUND
+            #         // IMAGE_DIVISION_FACTOR,
+            #     ] = [
+            #         0,
+            #         0,
+            #         255,
+            #     ]
     else:
         remaining_deadzone -= 1
-        tape_mask = cv.cvtColor(tape_mask, cv.COLOR_GRAY2BGR)
-        tape_mask[
-            SCANNER_HEAD_POS
-            // IMAGE_DIVISION_FACTOR : (SCANNER_HEAD_POS + SCANNER_WIDTH)
-            // IMAGE_DIVISION_FACTOR,
-            CONVEYOR_LEFT_BOUND
-            // IMAGE_DIVISION_FACTOR : CONVEYOR_RIGHT_BOUND
-            // IMAGE_DIVISION_FACTOR,
-        ] = [
-            255,
-            0,
-            0,
-        ]
-        # tape_mask[
-        #     SCANNER_TAIL_POS
-        #     // IMAGE_DIVISION_FACTOR : (SCANNER_TAIL_POS + SCANNER_WIDTH)
-        #     // IMAGE_DIVISION_FACTOR,
-        #     CONVEYOR_LEFT_BOUND
-        #     // IMAGE_DIVISION_FACTOR : CONVEYOR_RIGHT_BOUND
-        #     // IMAGE_DIVISION_FACTOR,
-        # ] = [
-        #     255,
-        #     0,
-        #     0,
-        # ]
-    cv.imshow("tape_mask", tape_mask)
-    cv.imshow("frame", frame_scaled)
+        if DEBUG:
+            tape_mask = cv.cvtColor(tape_mask, cv.COLOR_GRAY2BGR)
+            tape_mask[
+                SCANNER_HEAD_POS
+                // IMAGE_DIVISION_FACTOR : (SCANNER_HEAD_POS + SCANNER_WIDTH)
+                // IMAGE_DIVISION_FACTOR,
+                CONVEYOR_LEFT_BOUND
+                // IMAGE_DIVISION_FACTOR : CONVEYOR_RIGHT_BOUND
+                // IMAGE_DIVISION_FACTOR,
+            ] = [
+                255,
+                0,
+                0,
+            ]
+            # tape_mask[
+            #     SCANNER_TAIL_POS
+            #     // IMAGE_DIVISION_FACTOR : (SCANNER_TAIL_POS + SCANNER_WIDTH)
+            #     // IMAGE_DIVISION_FACTOR,
+            #     CONVEYOR_LEFT_BOUND
+            #     // IMAGE_DIVISION_FACTOR : CONVEYOR_RIGHT_BOUND
+            #     // IMAGE_DIVISION_FACTOR,
+            # ] = [
+            #     255,
+            #     0,
+            #     0,
+            # ]
+    if DEBUG:
+        cv.imshow("tape_mask", tape_mask)
+        cv.imshow("frame", frame_scaled)
+    else:
+        cv.imshow("frame", slot)
     if cv.waitKey(34) == ord("q"):
         break
 print("Detected", slots_detected, "out of", SLOT_COUNT, "slots")
