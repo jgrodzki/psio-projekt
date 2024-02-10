@@ -44,10 +44,11 @@ CLEAR_BORDER_WIDTH = 20
 
 OBJECTS = [
     ("bolt", 0.2, 7500.0, (0, 0, 255)),
-    ("long_bolt", 4.0, 9800.0, (0, 255, 0)),
-    ("short_bolt", 3.0, 1900.0, (255, 0, 0)),
+    ("long_bolt", 1.0, 9800.0, (0, 255, 0)),
+    ("short_bolt", 1.0, 2000.0, (255, 0, 0)),
     ("nut", 0.1, 10000.0, (0, 255, 255)),
     ("dowel", 0.1, 8600.0, (255, 0, 255)),
+    ("hexkey", 2.0, 10000.0, (255, 255, 0)),
 ]
 
 
@@ -121,9 +122,10 @@ while True:
         if scanner_head_detection:
             remaining_deadzone = SCANNER_DEADZONE
             slots_detected += 1
-            slot_mask = (
-                (distance(background_color, slot) > SLOT_COLOR_THRESHOLD) * 255
-            ).astype(np.uint8)
+            slot_mask = cv.cvtColor(slot, cv.COLOR_BGR2GRAY)
+            slot_mask = ((slot_mask < 0.9 * np.mean(background_color)) * 255).astype(
+                np.uint8
+            )
             # remove items on edges
             slot_mask = (
                 (
@@ -151,7 +153,7 @@ while True:
             for detected_contour in detected_contours:
                 for i, (name, object) in enumerate(contour_base.items()):
                     c = cv.matchShapes(
-                        object["contour"], detected_contour, cv.CONTOURS_MATCH_I1, 0
+                        object["contour"], detected_contour, cv.CONTOURS_MATCH_I3, 0
                     )
                     s = cv.contourArea(detected_contour)
                     if (
