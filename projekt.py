@@ -28,7 +28,7 @@ SLOT_WIDTH = 750
 # Width of the scanner region
 SCANNER_WIDTH = 30
 # For how many frames the slot detection is stopped after detecting a slot
-SCANNER_DEADZONE = 100
+SCANNER_DEADZONE = 70
 # Threshold value used for tape detection
 SCANNER_THRESHOLD = 200
 # Threshold value used for binarization of a slot
@@ -39,6 +39,8 @@ SLOT_OPENING_SIZE = 10
 SLOT_CLOSING_SIZE = 30
 # Tolerance of the contour size when matching against the threshold
 CONTOUR_SIZE_TOLERANCE = 0.2
+# Width of the border clearance
+CLEAR_BORDER_WIDTH = 20
 
 OBJECTS = [
     ("bolt", 0.2, 7500.0, (0, 0, 255)),
@@ -74,10 +76,6 @@ def build_contour_base(objects):
 contour_base = build_contour_base(OBJECTS)
 cap = cv.VideoCapture("b.mp4")
 ret, frame = cap.read()
-cv.imshow("frame", frame)
-while True:
-    if cv.waitKey(-1) == ord("q"):
-        break
 tape_color = get_mean_color(
     frame[
         TAPE_INITIAL_POS : TAPE_INITIAL_POS + TAPE_WIDTH,
@@ -128,7 +126,13 @@ while True:
             ).astype(np.uint8)
             # remove items on edges
             slot_mask = (
-                (ski.segmentation.clear_border(ski.measure.label(slot_mask)) != 0) * 255
+                (
+                    ski.segmentation.clear_border(
+                        ski.measure.label(slot_mask), buffer_size=CLEAR_BORDER_WIDTH
+                    )
+                    != 0
+                )
+                * 255
             ).astype(np.uint8)
             slot_mask = ski.morphology.closing(
                 slot_mask, ski.morphology.square(SLOT_CLOSING_SIZE)
